@@ -1,0 +1,297 @@
+{\rtf1\ansi\ansicpg1252\cocoartf2870
+\cocoatextscaling0\cocoaplatform0{\fonttbl\f0\froman\fcharset0 Times-Roman;}
+{\colortbl;\red255\green255\blue255;\red0\green0\blue0;}
+{\*\expandedcolortbl;;\cssrgb\c0\c0\c0;}
+\paperw11900\paperh16840\margl1440\margr1440\vieww11520\viewh8400\viewkind0
+\deftab720
+\pard\pardeftab720\partightenfactor0
+
+\f0\fs24 \cf0 \expnd0\expndtw0\kerning0
+\outl0\strokewidth0 \strokec2 /******************************************************************************\
+SQL Server Always On Availability Group\
+Pre-Planned Failover Validation Script\
+******************************************************************************/\
+\
+PRINT '========================================================================';\
+PRINT '1. Verify Availability Replica Health and Connectivity';\
+PRINT '========================================================================';\
+\
+SELECT\
+\'a0\'a0\'a0 ar.replica_server_name,\
+\'a0\'a0\'a0 ars.role_desc,\
+\'a0\'a0\'a0 ars.connected_state_desc,\
+\'a0\'a0\'a0 ars.operational_state_desc,\
+\'a0\'a0\'a0 ars.recovery_health_desc\
+FROM sys.dm_hadr_availability_replica_states ars\
+JOIN sys.availability_replicas ar\
+\'a0\'a0\'a0 ON ars.replica_id = ar.replica_id;\
+\
+GO\
+\
+PRINT '========================================================================';\
+PRINT '2. Verify Database Synchronization State and Health';\
+PRINT 'Expected: SYNCHRONIZED and HEALTHY';\
+PRINT '========================================================================';\
+\
+SELECT\
+\'a0\'a0\'a0 DB_NAME(database_id) AS DatabaseName,\
+\'a0\'a0\'a0 synchronization_state_desc,\
+\'a0\'a0\'a0 synchronization_health_desc\
+FROM sys.dm_hadr_database_replica_states\
+ORDER BY DatabaseName;\
+\
+GO\
+\
+PRINT '========================================================================';\
+PRINT '3. Verify Log Send Queue and Redo Queue';\
+PRINT 'Expected: log_send_queue_size and redo_queue_size close to 0';\
+PRINT '========================================================================';\
+\
+SELECT\
+\'a0\'a0\'a0 DB_NAME(database_id) AS DatabaseName,\
+\'a0\'a0\'a0 log_send_queue_size AS LogSendQueueKB,\
+\'a0\'a0\'a0 redo_queue_size AS RedoQueueKB,\
+\'a0\'a0\'a0 log_send_rate AS LogSendRateKBps,\
+\'a0\'a0\'a0 redo_rate AS RedoRateKBps\
+FROM sys.dm_hadr_database_replica_states\
+ORDER BY DatabaseName;\
+\
+GO\
+\
+PRINT '========================================================================';\
+PRINT '4. Verify Availability and Failover Modes';\
+PRINT 'Target replica should be SYNCHRONOUS_COMMIT';\
+PRINT '========================================================================';\
+\
+SELECT\
+\'a0\'a0\'a0 replica_server_name,\
+\'a0\'a0\'a0 availability_mode_desc,\
+\'a0\'a0\'a0 failover_mode_desc,\
+\'a0\'a0\'a0 seeding_mode_desc\
+FROM sys.availability_replicas;\
+\
+GO\
+\
+PRINT '========================================================================';\
+PRINT '5. Verify Failover Readiness / Commit Participation';\
+PRINT 'Expected: is_commit_participant = 1';\
+PRINT '========================================================================';\
+\
+SELECT\
+\'a0\'a0\'a0 ar.replica_server_name,\
+\'a0\'a0\'a0 DB_NAME(drs.database_id) AS DatabaseName,\
+\'a0\'a0\'a0 drs.is_commit_participant,\
+\'a0\'a0\'a0 drs.synchronization_state_desc\
+FROM sys.dm_hadr_database_replica_states drs\
+JOIN sys.availability_replicas ar\
+\'a0\'a0\'a0 ON drs.replica_id = ar.replica_id\
+ORDER BY DatabaseName;\
+\
+GO\
+\
+PRINT '========================================================================';\
+PRINT '6. Check for Suspended Databases';\
+PRINT 'Expected: is_suspended = 0';\
+PRINT '========================================================================';\
+\
+SELECT\
+\'a0\'a0\'a0 DB_NAME(database_id) AS DatabaseName,\
+\'a0\'a0\'a0 is_suspended,\
+\'a0\'a0\'a0 suspend_reason_desc\
+FROM sys.dm_hadr_database_replica_states\
+ORDER BY DatabaseName;\
+\
+GO\
+\
+PRINT '========================================================================';\
+PRINT '7. Check for Open Transactions';\
+PRINT 'Review output carefully before failover';\
+PRINT '========================================================================';\
+\
+DBCC OPENTRAN;\
+\
+GO\
+\
+PRINT '========================================================================';\
+PRINT '8. Review Active User Transactions';\
+PRINT '========================================================================';\
+\
+SELECT\
+\'a0\'a0\'a0 session_id,\
+\'a0\'a0\'a0 login_name,\
+\'a0\'a0\'a0 status,\
+\'a0\'a0\'a0 open_transaction_count,\
+\'a0\'a0\'a0 host_name,\
+\'a0\'a0\'a0 program_name\
+FROM sys.dm_exec_sessions\
+WHERE open_transaction_count > 0\
+ORDER BY open_transaction_count DESC;\
+\
+GO\
+\
+PRINT '========================================================================';\
+PRINT '9. Check for Blocking Sessions';\
+PRINT '========================================================================';\
+\
+SELECT\
+\'a0\'a0\'a0 session_id,\
+\'a0\'a0\'a0 blocking_session_id,\
+\'a0\'a0\'a0 wait_type,\
+\'a0\'a0\'a0 wait_time,\
+\'a0\'a0\'a0 status,\
+\'a0\'a0\'a0 command\
+FROM sys.dm_exec_requests\
+WHERE blocking_session_id <> 0;\
+\
+GO\
+\
+PRINT '========================================================================';\
+PRINT '10. Check for Running Backups, DBCC, Index Maintenance, or Long Tasks';\
+PRINT '========================================================================';\
+\
+SELECT\
+\'a0\'a0\'a0 session_id,\
+\'a0\'a0\'a0 command,\
+\'a0\'a0\'a0 status,\
+\'a0\'a0\'a0 start_time,\
+\'a0\'a0\'a0 percent_complete,\
+\'a0\'a0\'a0 wait_type\
+FROM sys.dm_exec_requests\
+WHERE percent_complete > 0\
+ORDER BY percent_complete DESC;\
+\
+GO\
+\
+PRINT '========================================================================';\
+PRINT '11. Verify AG Listener Configuration';\
+PRINT '========================================================================';\
+\
+SELECT\
+\'a0\'a0\'a0 dns_name,\
+\'a0\'a0\'a0 port,\
+\'a0\'a0\'a0 is_conformant\
+FROM sys.availability_group_listeners;\
+\
+GO\
+\
+PRINT '========================================================================';\
+PRINT '12. Verify Current Primary and Secondary Roles';\
+PRINT 'Document these roles before failover';\
+PRINT '========================================================================';\
+\
+SELECT\
+\'a0\'a0\'a0 ag.name AS AGName,\
+\'a0\'a0\'a0 ar.replica_server_name,\
+\'a0\'a0\'a0 ars.role_desc\
+FROM sys.availability_groups ag\
+JOIN sys.availability_replicas ar\
+\'a0\'a0\'a0 ON ag.group_id = ar.group_id\
+JOIN sys.dm_hadr_availability_replica_states ars\
+\'a0\'a0\'a0 ON ar.replica_id = ars.replica_id\
+ORDER BY ag.name;\
+\
+GO\
+\
+PRINT '========================================================================';\
+PRINT '13. Verify Overall AG Health';\
+PRINT '========================================================================';\
+\
+SELECT\
+\'a0\'a0\'a0 ar.replica_server_name,\
+\'a0\'a0\'a0 ars.connected_state_desc,\
+\'a0\'a0\'a0 ars.operational_state_desc,\
+\'a0\'a0\'a0 ars.recovery_health_desc,\
+\'a0\'a0\'a0 ars.synchronization_health_desc,\
+\'a0\'a0\'a0 ars.role_desc\
+FROM sys.dm_hadr_availability_replica_states ars\
+JOIN sys.availability_replicas ar\
+\'a0\'a0\'a0 ON ars.replica_id = ar.replica_id\
+ORDER BY ar.replica_server_name;\
+\
+GO\
+\
+PRINT '========================================================================';\
+PRINT '14. Comprehensive Ready-To-Failover Summary';\
+PRINT 'Expected Conditions:';\
+PRINT ' - SYNCHRONIZED';\
+PRINT ' - HEALTHY';\
+PRINT ' - log_send_queue_size near 0';\
+PRINT ' - redo_queue_size near 0';\
+PRINT ' - is_suspended = 0';\
+PRINT '========================================================================';\
+\
+SELECT\
+\'a0\'a0\'a0 DB_NAME(drs.database_id) AS DatabaseName,\
+\'a0\'a0\'a0 ar.replica_server_name,\
+\'a0\'a0\'a0 ars.role_desc,\
+\'a0\'a0\'a0 drs.synchronization_state_desc,\
+\'a0\'a0\'a0 drs.synchronization_health_desc,\
+\'a0\'a0\'a0 drs.log_send_queue_size,\
+\'a0\'a0\'a0 drs.redo_queue_size,\
+\'a0\'a0\'a0 drs.is_suspended\
+FROM sys.dm_hadr_database_replica_states drs\
+JOIN sys.availability_replicas ar\
+\'a0\'a0\'a0 ON drs.replica_id = ar.replica_id\
+JOIN sys.dm_hadr_availability_replica_states ars\
+\'a0\'a0\'a0 ON drs.replica_id = ars.replica_id\
+ORDER BY DatabaseName;\
+\
+GO\
+\
+/******************************************************************************\
+If all checks are healthy:\
+\
+1. Connect to the synchronized secondary replica.\
+2. Execute:\
+\
+ALTER AVAILABILITY GROUP [AG_Name] FAILOVER;\
+\
+******************************************************************************/\
+\
+PRINT '========================================================================';\
+PRINT 'POST-FAILOVER VALIDATION';\
+PRINT 'Run after failover completes';\
+PRINT '========================================================================';\
+\
+GO\
+\
+PRINT '15. Verify Current Server';\
+\
+SELECT @@SERVERNAME AS CurrentServer;\
+\
+GO\
+\
+PRINT '16. Verify New Primary Role';\
+\
+SELECT\
+\'a0\'a0\'a0 ar.replica_server_name,\
+\'a0\'a0\'a0 ars.role_desc\
+FROM sys.dm_hadr_availability_replica_states ars\
+JOIN sys.availability_replicas ar\
+\'a0\'a0\'a0 ON ars.replica_id = ar.replica_id\
+ORDER BY ar.replica_server_name;\
+\
+GO\
+\
+PRINT '17. Verify All Databases are Online';\
+\
+SELECT\
+\'a0\'a0\'a0 name,\
+\'a0\'a0\'a0 state_desc\
+FROM sys.databases\
+WHERE database_id > 4\
+ORDER BY name;\
+\
+GO\
+\
+PRINT '18. Verify AG Synchronization Status After Failover';\
+\
+SELECT\
+\'a0\'a0\'a0 DB_NAME(database_id) AS DatabaseName,\
+\'a0\'a0\'a0 synchronization_state_desc,\
+\'a0\'a0\'a0 synchronization_health_desc\
+FROM sys.dm_hadr_database_replica_states\
+ORDER BY DatabaseName;\
+\
+GO\
+}
